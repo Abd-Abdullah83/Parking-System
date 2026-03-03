@@ -1,0 +1,960 @@
+
+#define _CRT_SECURE_NO_WARNINGS
+
+#include <SFML/Graphics.hpp>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <cstdio>
+
+//  COLOURS
+const sf::Color C_BG(5, 10, 20);
+const sf::Color C_PANEL(10, 18, 35);
+const sf::Color C_CARD(13, 26, 46);
+const sf::Color C_BORDER(25, 58, 92);
+const sf::Color C_ACCENT(0, 212, 255);
+const sf::Color C_GREEN(0, 255, 136);
+const sf::Color C_RED(255, 51, 51);
+const sf::Color C_YELLOW(255, 215, 0);
+const sf::Color C_DIM(74, 106, 122);
+const sf::Color C_TEXT(200, 230, 245);
+const sf::Color C_EMPTY_BG(13, 42, 26);
+const sf::Color C_OCC_BG(42, 13, 13);
+
+
+//  DATA
+struct ParkingLot {
+    int      b = 0;
+    char**** ptr = nullptr;
+    int* rpb = nullptr;
+    int** spb = nullptr;
+};
+
+
+//  CORE LOGIC
+void emptySlot(char**** ptr, int b, int r, int s)
+{
+    ptr[b][r][s] = new char[6];
+    const char* E = "EMPTY";
+    for (int i = 0; i < 6; i++) ptr[b][r][s][i] = E[i];
+}
+
+bool isSlotEmpty(char**** ptr, int block, int row, int slot)
+{
+    const char* E = "EMPTY";
+    for (int j = 0; j < 5; j++)
+        if (ptr[block - 1][row - 1][slot - 1][j] != E[j]) return false;
+    return true;
+}
+
+void allocateLot(ParkingLot& lot,
+    const std::vector<int>& rows,
+    const std::vector<std::vector<int>>& slots)
+{
+    lot.rpb = new int[lot.b];
+    lot.spb = new int* [lot.b];
+    for (int i = 0; i < lot.b; i++)
+    {
+        lot.rpb[i] = rows[i];
+        lot.ptr[i] = new char** [rows[i]];
+        lot.spb[i] = new int[rows[i]];
+        for (int j = 0; j < rows[i]; j++)
+        {
+            lot.spb[i][j] = slots[i][j];
+            lot.ptr[i][j] = new char* [slots[i][j]];
+            for (int k = 0; k < slots[i][j]; k++)
+                emptySlot(lot.ptr, i, j, k);
+        }
+    }
+}
+
+void freeLot(ParkingLot& lot)
+{
+    if (!lot.ptr) return;
+    for (int i = 0; i < lot.b; i++)
+    {
+        for (int j = 0; j < lot.rpb[i]; j++)
+        {
+            for (int k = 0; k < lot.spb[i][j]; k++)
+                delete[] lot.ptr[i][j][k];
+            delete[] lot.ptr[i][j];
+        }
+        delete[] lot.ptr[i];
+        delete[] lot.spb[i];
+    }
+    delete[] lot.ptr;  lot.ptr = nullptr;
+    delete[] lot.rpb;  lot.rpb = nullptr;
+    delete[] lot.spb;  lot.spb = nullptr;
+}
+
+std::vector<int> findCar(ParkingLot& lot, const std::string& plate)
+{
+    for (int i = 0; i < lot.b; i++)
+        for (int j = 0; j < lot.rpb[i]; j++)
+            for (int k = 0; k < lot.spb[i][j]; k++)
+            {
+                if (isSlotEmpty(lot.ptr, i + 1, j + 1, k + 1)) continue;
+                if (std::string(lot.ptr[i][j][k]) == plate)
+                    return { i + 1, j + 1, k + 1 };
+            }
+    return { -1, -1, -1 };
+}
+
+std::vector<int> smartFind(ParkingLot& lot, int block)
+{
+    int bestRow = -1, bestSlot = -1;
+    double minDis = 1e9;
+    for (int i = 0; i < lot.rpb[block - 1]; i++)
+        for (int j = 0; j < lot.spb[block - 1][i]; j++)
+            if (isSlotEmpty(lot.ptr, block, i + 1, j + 1))
+            {
+                double x = static_cast<double>(j) * 8.0;
+                double y = static_cast<double>(i) * 16.0;
+                double dis = std::sqrt(x * x + y * y);
+                if (dis < minDis) { minDis = dis; bestRow = i + 1; bestSlot = j + 1; }
+            }
+    return { bestRow, bestSlot };
+}
+
+
+static void safeCopyPlate(char*& dest, const char* src)
+{
+   
+    int len = static_cast<int>(strlen(src));
+    dest = new char[len + 1];
+    for (int c = 0; c <= len; c++) dest[c] = src[c];
+}
+
+void growRow(ParkingLot& lot, int block, int row, int newSlots)
+{
+    int old = lot.spb[block - 1][row - 1];
+
+    // Allocate new array
+    char** N = new char* [newSlots];
+
+   
+    for (int i = 0; i < newSlots; i++)
+    {
+        N[i] = new char[6];
+        const char* E = "EMPTY";
+        for (int x = 0; x < 6; x++) N[i][x] = E[x];
+    }
+
+    
+    for (int i = 0; i < old; i++)
+    {
+        if (!isSlotEmpty(lot.ptr, block, row, i + 1))
+        {
+            delete[] N[i];
+            safeCopyPlate(N[i], lot.ptr[block - 1][row - 1][i]);
+        }
+        delete[] lot.ptr[block - 1][row - 1][i];
+    }
+
+    delete[] lot.ptr[block - 1][row - 1];
+    lot.ptr[block - 1][row - 1] = N;
+    lot.spb[block - 1][row - 1] = newSlots;
+}
+
+bool shrinkRow(ParkingLot& lot, int block, int row, int newSlots)
+{
+    int old = lot.spb[block - 1][row - 1];
+    for (int i = newSlots; i < old; i++)
+        if (!isSlotEmpty(lot.ptr, block, row, i + 1)) return false;
+
+    char** N = new char* [newSlots];
+    for (int i = 0; i < newSlots; i++)
+    {
+        N[i] = new char[6];
+        const char* E = "EMPTY";
+        for (int x = 0; x < 6; x++) N[i][x] = E[x];
+    }
+    for (int i = 0; i < newSlots; i++)
+    {
+        if (!isSlotEmpty(lot.ptr, block, row, i + 1))
+        {
+            delete[] N[i];
+            safeCopyPlate(N[i], lot.ptr[block - 1][row - 1][i]);
+        }
+    }
+    for (int i = 0; i < old; i++) delete[] lot.ptr[block - 1][row - 1][i];
+    delete[] lot.ptr[block - 1][row - 1];
+    lot.ptr[block - 1][row - 1] = N;
+    lot.spb[block - 1][row - 1] = newSlots;
+    return true;
+}
+
+void getStats(ParkingLot& lot, int& total, int& occupied, int& free_)
+{
+    total = occupied = free_ = 0;
+    for (int i = 0; i < lot.b; i++)
+        for (int j = 0; j < lot.rpb[i]; j++)
+            for (int k = 0; k < lot.spb[i][j]; k++)
+            {
+                total++;
+                if (!isSlotEmpty(lot.ptr, i + 1, j + 1, k + 1)) occupied++;
+                else free_++;
+            }
+}
+
+//  SHAPE HELPER
+sf::RectangleShape makeRect(float x, float y, float w, float h,
+    sf::Color fill,
+    sf::Color outline = sf::Color(25, 58, 92),
+    float thick = 1.f)
+{
+    sf::RectangleShape r({ w, h });
+    r.setPosition(x, y);
+    r.setFillColor(fill);
+    r.setOutlineColor(outline);
+    r.setOutlineThickness(thick);
+    return r;
+}
+
+
+
+enum Screen { SCR_SETUP, SCR_MAIN };
+enum ActivePanel {
+    PNL_VIEW, PNL_PARK, PNL_UNPARK, PNL_FIND,
+    PNL_SMART, PNL_GROW, PNL_SHRINK
+};
+
+//  TEXT INPUT
+struct TextInput
+{
+    sf::RectangleShape box;
+    sf::Text           label, text;
+    std::string        value;
+    bool               focused = false;
+    bool               numbersOnly = false;
+
+    void draw(sf::RenderWindow& w)
+    {
+        box.setOutlineColor(focused ? C_ACCENT : C_BORDER);
+        box.setFillColor(focused ? sf::Color(0, 212, 255, 15) : sf::Color(5, 10, 20));
+        w.draw(box); w.draw(label);
+        text.setString(value + (focused ? "|" : ""));
+        w.draw(text);
+    }
+
+    void handleEvent(const sf::Event& ev)
+    {
+        if (ev.type != sf::Event::TextEntered || !focused) return;
+        if (ev.text.unicode == 8 && !value.empty()) { value.pop_back(); return; }
+        if (ev.text.unicode == 13) { focused = false;  return; }
+        if (ev.text.unicode >= 32 && ev.text.unicode < 127)
+        {
+            char c = static_cast<char>(ev.text.unicode);
+            if (numbersOnly && (c < '0' || c > '9')) return;
+            if (value.size() < 20)
+                value += static_cast<char>(toupper(static_cast<unsigned char>(c)));
+        }
+    }
+
+    bool contains(sf::Vector2f p) const { return box.getGlobalBounds().contains(p); }
+};
+
+struct Button
+{
+    sf::RectangleShape box;
+    sf::Text           label;
+    sf::Color          normalColor, hoverColor, outlineNormal, outlineHover;
+
+    void draw(sf::RenderWindow& w, sf::Vector2f mouse)
+    {
+        bool hov = box.getGlobalBounds().contains(mouse);
+        box.setFillColor(hov ? hoverColor : normalColor);
+        box.setOutlineColor(hov ? outlineHover : outlineNormal);
+        w.draw(box); w.draw(label);
+    }
+    bool clicked(sf::Vector2f p) const { return box.getGlobalBounds().contains(p); }
+};
+
+struct Toast { std::string msg; sf::Color color; float timer; };
+
+TextInput makeInput(const sf::Font& font,
+    float x, float y, float w, float h,
+    const std::string& lbl, bool numOnly = false)
+{
+    TextInput inp;
+    inp.box = makeRect(x, y, w, h, sf::Color(5, 10, 20), C_BORDER);
+    inp.label.setFont(font); inp.label.setString(lbl);
+    inp.label.setCharacterSize(11); inp.label.setFillColor(C_DIM);
+    inp.label.setPosition(x, y - 17.f);
+    inp.text.setFont(font); inp.text.setCharacterSize(14);
+    inp.text.setFillColor(C_ACCENT); inp.text.setPosition(x + 8.f, y + 8.f);
+    inp.numbersOnly = numOnly;
+    return inp;
+}
+
+Button makeBtn(const sf::Font& font,
+    float x, float y, float w, float h,
+    const std::string& lbl,
+    sf::Color fill = sf::Color(0, 212, 255, 20),
+    sf::Color hover = sf::Color(0, 212, 255, 50),
+    sf::Color outNormal = C_ACCENT,
+    sf::Color outHover = C_ACCENT)
+{
+    Button b;
+    b.box = makeRect(x, y, w, h, fill, outNormal);
+    b.normalColor = fill; b.hoverColor = hover;
+    b.outlineNormal = outNormal; b.outlineHover = outHover;
+    b.label.setFont(font); b.label.setString(lbl);
+    b.label.setCharacterSize(13); b.label.setFillColor(outNormal);
+    sf::FloatRect tb = b.label.getLocalBounds();
+    b.label.setPosition(x + (w - tb.width) / 2.f, y + (h - tb.height) / 2.f - 2.f);
+    return b;
+}
+
+
+void setPos(TextInput& inp, float x, float y)
+{
+    inp.box.setPosition(x, y);
+    inp.label.setPosition(x, y - 17.f);
+    inp.text.setPosition(x + 8.f, y + 8.f);
+}
+
+
+void setPos(Button& b, float x, float y)
+{
+    b.box.setPosition(x, y);
+    sf::FloatRect lb = b.label.getLocalBounds();
+    float bw = b.box.getSize().x, bh = b.box.getSize().y;
+    b.label.setPosition(x + (bw - lb.width) / 2.f, y + (bh - lb.height) / 2.f - 2.f);
+}
+
+
+int main()
+{
+    sf::RenderWindow window(sf::VideoMode(1280, 780),
+        "Smart Parking System",
+        sf::Style::Close | sf::Style::Titlebar);
+    window.setFramerateLimit(60);
+
+    sf::Font font;
+    const char* fontPaths[] = {
+        "arial.ttf",
+        "fonts/arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/System/Library/Fonts/Menlo.ttc",
+        nullptr
+    };
+    bool fontLoaded = false;
+    for (int i = 0; fontPaths[i] && !fontLoaded; i++)
+        fontLoaded = font.loadFromFile(fontPaths[i]);
+    if (!fontLoaded)
+    {
+        std::cerr << "ERROR: No font found.\n"
+            << "Place 'arial.ttf' next to the executable.\n";
+        return 1;
+    }
+
+    ParkingLot         lot;
+    Screen             screen = SCR_SETUP;
+    ActivePanel        panel = PNL_VIEW;
+    std::vector<Toast> toasts;
+    int   highlightB = -1, highlightR = -1, highlightS = -1;
+    float highlightTimer = 0.f;
+    float viewScrollY = 0.f;
+
+   
+    int  setupBlockCount = 2;
+    std::vector<TextInput>              setupRowInputs;
+    bool setupGenerated = false;
+
+    TextInput inpBlocks = makeInput(font, 540.f, 290.f, 200.f, 36.f, "NUMBER OF BLOCKS", true);
+    inpBlocks.value = "2";
+    Button btnNext = makeBtn(font, 540.f, 345.f, 200.f, 38.f, "GENERATE STRUCTURE");
+    Button btnCreate = makeBtn(font, 0.f, 0.f, 0.f, 0.f, "");
+
+    
+    const float SBX = 10.f, SBW = 195.f, SBH = 38.f, SBY0 = 140.f;
+    std::vector<Button> sidebtns;
+    const char* sidelabels[] = {
+        "VIEW LOT","PARK VEHICLE","UNPARK","FIND VEHICLE",
+        "SMART PARK","GROW SLOTS","SHRINK SLOTS"
+    };
+    for (int i = 0; i < 7; i++)
+    {
+        sf::Color oc = C_BORDER, oh = C_ACCENT;
+        if (i == 1) { oc = C_GREEN; oh = C_GREEN; }
+        if (i == 2) { oc = C_RED;  oh = C_RED; }
+        sidebtns.push_back(makeBtn(font,
+            SBX, SBY0 + static_cast<float>(i) * (SBH + 6.f), SBW, SBH,
+            sidelabels[i],
+            sf::Color(5, 10, 20), sf::Color(0, 212, 255, 20), oc, oh));
+    }
+
+    // PARK
+    TextInput pBlock = makeInput(font, 0, 0, 120, 34, "BLOCK", true);
+    TextInput pRow = makeInput(font, 0, 0, 120, 34, "ROW", true);
+    TextInput pSlot = makeInput(font, 0, 0, 120, 34, "SLOT", true);
+    TextInput pPlate = makeInput(font, 0, 0, 160, 34, "LICENSE (ABC-123)");
+    Button btnPark = makeBtn(font, 0, 0, 200, 36, "PARK VEHICLE",
+        sf::Color(0, 255, 136, 20), sf::Color(0, 255, 136, 50), C_GREEN, C_GREEN);
+    // UNPARK
+    TextInput upBlock = makeInput(font, 0, 0, 120, 34, "BLOCK", true);
+    TextInput upRow = makeInput(font, 0, 0, 120, 34, "ROW", true);
+    TextInput upSlot = makeInput(font, 0, 0, 120, 34, "SLOT", true);
+    Button btnUnpark = makeBtn(font, 0, 0, 200, 36, "UNPARK VEHICLE",
+        sf::Color(255, 51, 51, 20), sf::Color(255, 51, 51, 50), C_RED, C_RED);
+    // FIND
+    TextInput fPlate = makeInput(font, 0, 0, 200, 34, "LICENSE PLATE");
+    Button btnFind = makeBtn(font, 0, 0, 150, 36, "SEARCH");
+    // SMART
+    TextInput smBlock = makeInput(font, 0, 0, 120, 34, "BLOCK", true);
+    TextInput smPlate = makeInput(font, 0, 0, 200, 34, "LICENSE (ABC-123)");
+    Button btnSmart = makeBtn(font, 0, 0, 200, 36, "FIND + PARK",
+        sf::Color(255, 215, 0, 20), sf::Color(255, 215, 0, 50), C_YELLOW, C_YELLOW);
+    // GROW
+    TextInput grBlock = makeInput(font, 0, 0, 120, 34, "BLOCK", true);
+    TextInput grRow = makeInput(font, 0, 0, 120, 34, "ROW", true);
+    TextInput grNew = makeInput(font, 0, 0, 140, 34, "NEW SLOT COUNT", true);
+    Button btnGrow = makeBtn(font, 0, 0, 200, 36, "GROW SLOTS");
+    // SHRINK
+    TextInput shBlock = makeInput(font, 0, 0, 120, 34, "BLOCK", true);
+    TextInput shRow = makeInput(font, 0, 0, 120, 34, "ROW", true);
+    TextInput shNew = makeInput(font, 0, 0, 140, 34, "NEW SLOT COUNT", true);
+    Button btnShrink = makeBtn(font, 0, 0, 200, 36, "SHRINK SLOTS",
+        sf::Color(255, 51, 51, 20), sf::Color(255, 51, 51, 50), C_RED, C_RED);
+
+    std::string resultMsg;
+    sf::Color   resultColor = C_TEXT;
+
+    auto addToast = [&](const std::string& msg, sf::Color c = C_ACCENT)
+        {
+            toasts.push_back({ msg, c, 3.0f });
+            resultMsg = msg; resultColor = c;
+        };
+
+    
+    std::vector<TextInput*> allInputs = {
+        &inpBlocks,
+        &pBlock,&pRow,&pSlot,&pPlate,
+        &upBlock,&upRow,&upSlot,
+        &fPlate, &smBlock,&smPlate,
+        &grBlock,&grRow,&grNew,
+        &shBlock,&shRow,&shNew
+    };
+
+    sf::Clock clock;
+
+   
+    while (window.isOpen())
+    {
+        float dt = clock.restart().asSeconds();
+        sf::Vector2f mouse = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+
+        sf::Event ev;
+        while (window.pollEvent(ev))
+        {
+            if (ev.type == sf::Event::Closed) window.close();
+
+            for (auto* inp : allInputs)      inp->handleEvent(ev);
+            for (auto& bi : setupRowInputs) bi.handleEvent(ev);
+
+            if (ev.type == sf::Event::MouseWheelScrolled &&
+                screen == SCR_MAIN && panel == PNL_VIEW)
+            {
+                viewScrollY -= ev.mouseWheelScroll.delta * 25.f;
+                if (viewScrollY < 0.f) viewScrollY = 0.f;
+            }
+
+            if (ev.type == sf::Event::MouseButtonPressed &&
+                ev.mouseButton.button == sf::Mouse::Left)
+            {
+                for (auto* inp : allInputs)      inp->focused = false;
+                for (auto& bi : setupRowInputs) bi.focused = false;
+
+              
+                for (auto* inp : allInputs)
+                    if (inp->contains(mouse)) inp->focused = true;
+                for (auto& bi : setupRowInputs)
+                    if (bi.contains(mouse)) bi.focused = true;
+
+              
+                if (screen == SCR_SETUP)
+                {
+                    if (btnNext.clicked(mouse))
+                    {
+                        setupBlockCount = inpBlocks.value.empty() ? 2
+                            : std::stoi(inpBlocks.value);
+                        if (setupBlockCount < 1) setupBlockCount = 1;
+                        if (setupBlockCount > 8) setupBlockCount = 8;
+
+                        setupRowInputs.clear();
+                        for (int i = 0; i < setupBlockCount; i++)
+                        {
+                            float sx = 100.f + static_cast<float>(i) * 170.f;
+                            setupRowInputs.push_back(
+                                makeInput(font, sx, 430.f, 130.f, 34.f,
+                                    "ROWS (Blk " + std::to_string(i + 1) + ")", true));
+                            setupRowInputs.back().value = "3";
+                        }
+                        setupGenerated = true;
+                        btnCreate = makeBtn(font, 540.f, 510.f, 200.f, 38.f, "CREATE PARKING LOT");
+                    }
+
+                    if (setupGenerated && btnCreate.clicked(mouse))
+                    {
+                        std::vector<int>              rows;
+                        std::vector<std::vector<int>> slots;
+                        for (int i = 0; i < setupBlockCount; i++)
+                        {
+                            int r = setupRowInputs[i].value.empty() ? 2
+                                : std::stoi(setupRowInputs[i].value);
+                            if (r < 1)r = 1; if (r > 10)r = 10;
+                            rows.push_back(r);
+                            slots.push_back(std::vector<int>(r, 4));
+                        }
+                        freeLot(lot);
+                        lot.b = setupBlockCount;
+                        lot.ptr = new char*** [lot.b];
+                        allocateLot(lot, rows, slots);
+                        screen = SCR_MAIN;
+                        panel = PNL_VIEW;
+                    }
+                }
+
+                
+                if (screen == SCR_MAIN)
+                {
+                    for (int i = 0; i < 7; i++)
+                        if (sidebtns[i].clicked(mouse))
+                        {
+                            panel = static_cast<ActivePanel>(i);
+                            resultMsg.clear();
+                            highlightB = highlightR = highlightS = -1;
+                        }
+
+                    const float PX = 220.f, PY = 70.f;
+                    const float FY = PY + 130.f;
+
+                  
+                    if (panel == PNL_PARK && btnPark.clicked(mouse))
+                    {
+                        if (!lot.ptr) { addToast("No lot created!", C_RED); }
+                        else
+                        {
+                            int b = pBlock.value.empty() ? 0 : std::stoi(pBlock.value);
+                            int r = pRow.value.empty() ? 0 : std::stoi(pRow.value);
+                            int s = pSlot.value.empty() ? 0 : std::stoi(pSlot.value);
+                            std::string pl = pPlate.value;
+                            if (b<1 || b>lot.b)             addToast("Invalid block!", C_RED);
+                            else if (r<1 || r>lot.rpb[b - 1])      addToast("Invalid row!", C_RED);
+                            else if (s<1 || s>lot.spb[b - 1][r - 1]) addToast("Invalid slot!", C_RED);
+                            else if (!isSlotEmpty(lot.ptr, b, r, s))
+                                addToast("Slot occupied: " + std::string(lot.ptr[b - 1][r - 1][s - 1]), C_RED);
+                            else if (pl.size() != 7) addToast("License must be 7 chars e.g. ABC-123", C_RED);
+                            else
+                            {
+                                delete[] lot.ptr[b - 1][r - 1][s - 1];
+                                lot.ptr[b - 1][r - 1][s - 1] = new char[8];
+                                for (int ci = 0; ci < 7; ci++)
+                                    lot.ptr[b - 1][r - 1][s - 1][ci] = pl[static_cast<size_t>(ci)];
+                                lot.ptr[b - 1][r - 1][s - 1][7] = '\0';
+                                addToast("Parked " + pl + " B" + std::to_string(b) + " R" + std::to_string(r) + " S" + std::to_string(s), C_GREEN);
+                                highlightB = b; highlightR = r; highlightS = s; highlightTimer = 4.f;
+                                panel = PNL_VIEW;
+                            }
+                        }
+                    }
+
+                    if (panel == PNL_UNPARK && btnUnpark.clicked(mouse))
+                    {
+                        if (!lot.ptr) { addToast("No lot!", C_RED); }
+                        else
+                        {
+                            int b = upBlock.value.empty() ? 0 : std::stoi(upBlock.value);
+                            int r = upRow.value.empty() ? 0 : std::stoi(upRow.value);
+                            int s = upSlot.value.empty() ? 0 : std::stoi(upSlot.value);
+                            if (b<1 || b>lot.b)              addToast("Invalid block!", C_RED);
+                            else if (r<1 || r>lot.rpb[b - 1])       addToast("Invalid row!", C_RED);
+                            else if (s<1 || s>lot.spb[b - 1][r - 1])  addToast("Invalid slot!", C_RED);
+                            else if (isSlotEmpty(lot.ptr, b, r, s)) addToast("Slot already empty!", C_RED);
+                            else
+                            {
+                                std::string pl = lot.ptr[b - 1][r - 1][s - 1];
+                                delete[] lot.ptr[b - 1][r - 1][s - 1];
+                                lot.ptr[b - 1][r - 1][s - 1] = new char[6];
+                                const char* E = "EMPTY";
+                                for (int ci = 0; ci < 6; ci++) lot.ptr[b - 1][r - 1][s - 1][ci] = E[ci];
+                                addToast("Unparked " + pl, C_GREEN);
+                                panel = PNL_VIEW;
+                            }
+                        }
+                    }
+
+                  
+                    if (panel == PNL_FIND && btnFind.clicked(mouse))
+                    {
+                        auto res = findCar(lot, fPlate.value);
+                        if (res[0] == -1) addToast("Vehicle " + fPlate.value + " NOT FOUND", C_RED);
+                        else
+                        {
+                            addToast("Found: B" + std::to_string(res[0]) + " R" + std::to_string(res[1]) + " S" + std::to_string(res[2]), C_GREEN);
+                            highlightB = res[0]; highlightR = res[1]; highlightS = res[2]; highlightTimer = 5.f;
+                            panel = PNL_VIEW;
+                        }
+                    }
+
+                    if (panel == PNL_SMART && btnSmart.clicked(mouse))
+                    {
+                        int b = smBlock.value.empty() ? 0 : std::stoi(smBlock.value);
+                        std::string pl = smPlate.value;
+                        if (b<1 || b>lot.b) addToast("Invalid block!", C_RED);
+                        else if (pl.size() != 7)  addToast("License must be 7 chars", C_RED);
+                        else
+                        {
+                            auto res = smartFind(lot, b);
+                            if (res[0] == -1) addToast("Block " + std::to_string(b) + " is FULL!", C_RED);
+                            else
+                            {
+                                int rr = res[0], ss = res[1];
+                                delete[] lot.ptr[b - 1][rr - 1][ss - 1];
+                                lot.ptr[b - 1][rr - 1][ss - 1] = new char[8];
+                                for (int ci = 0; ci < 7; ci++)
+                                    lot.ptr[b - 1][rr - 1][ss - 1][ci] = pl[static_cast<size_t>(ci)];
+                                lot.ptr[b - 1][rr - 1][ss - 1][7] = '\0';
+                                addToast("Smart: " + pl + " -> B" + std::to_string(b) + " R" + std::to_string(rr) + " S" + std::to_string(ss), C_YELLOW);
+                                highlightB = b; highlightR = rr; highlightS = ss; highlightTimer = 5.f;
+                                panel = PNL_VIEW;
+                            }
+                        }
+                    }
+
+                    if (panel == PNL_GROW && btnGrow.clicked(mouse))
+                    {
+                        int b = grBlock.value.empty() ? 0 : std::stoi(grBlock.value);
+                        int r = grRow.value.empty() ? 0 : std::stoi(grRow.value);
+                        int ns = grNew.value.empty() ? 0 : std::stoi(grNew.value);
+                        if (b<1 || b>lot.b)             addToast("Invalid block!", C_RED);
+                        else if (r<1 || r>lot.rpb[b - 1])      addToast("Invalid row!", C_RED);
+                        else if (ns <= lot.spb[b - 1][r - 1])    addToast("New count must be > " + std::to_string(lot.spb[b - 1][r - 1]), C_RED);
+                        else { growRow(lot, b, r, ns); addToast("Grew to " + std::to_string(ns) + " slots", C_GREEN); panel = PNL_VIEW; }
+                    }
+
+                    if (panel == PNL_SHRINK && btnShrink.clicked(mouse))
+                    {
+                        int b = shBlock.value.empty() ? 0 : std::stoi(shBlock.value);
+                        int r = shRow.value.empty() ? 0 : std::stoi(shRow.value);
+                        int ns = shNew.value.empty() ? 0 : std::stoi(shNew.value);
+                        if (b<1 || b>lot.b)             addToast("Invalid block!", C_RED);
+                        else if (r<1 || r>lot.rpb[b - 1])      addToast("Invalid row!", C_RED);
+                        else if (ns >= lot.spb[b - 1][r - 1])    addToast("New count must be < " + std::to_string(lot.spb[b - 1][r - 1]), C_RED);
+                        else if (!shrinkRow(lot, b, r, ns))   addToast("Cannot shrink: tail slots occupied!", C_RED);
+                        else { addToast("Shrunk to " + std::to_string(ns) + " slots", C_GREEN); panel = PNL_VIEW; }
+                    }
+                }
+            }
+        } // pollEvent
+        highlightTimer -= dt;
+        if (highlightTimer <= 0.f) highlightB = highlightR = highlightS = -1;
+        toasts.erase(
+            std::remove_if(toasts.begin(), toasts.end(),
+                [&dt](Toast& t) { t.timer -= dt; return t.timer <= 0.f; }),
+            toasts.end());
+
+        window.clear(C_BG);
+
+        if (screen == SCR_SETUP)
+        {
+            // Grid background
+            for (int gx = 0; gx < 1280; gx += 40)
+            {
+                sf::RectangleShape l({ 1.f,780.f });
+                l.setPosition(static_cast<float>(gx), 0.f);
+                l.setFillColor(sf::Color(0, 212, 255, 10)); window.draw(l);
+            }
+            for (int gy = 0; gy < 780; gy += 40)
+            {
+                sf::RectangleShape l({ 1280.f,1.f });
+                l.setPosition(0.f, static_cast<float>(gy));
+                l.setFillColor(sf::Color(0, 212, 255, 10)); window.draw(l);
+            }
+
+            
+            {
+                sf::Text t; t.setFont(font);
+                t.setString("SMART PARKING SYSTEM");
+                t.setCharacterSize(36); t.setFillColor(C_ACCENT); t.setLetterSpacing(2.f);
+                sf::FloatRect tb = t.getLocalBounds();
+                t.setPosition((1280.f - tb.width) / 2.f, 130.f); window.draw(t);
+
+                sf::Text sub; sub.setFont(font);
+                sub.setString("CONFIGURE YOUR PARKING LOT STRUCTURE");
+                sub.setCharacterSize(13); sub.setFillColor(C_DIM);
+                sf::FloatRect sb = sub.getLocalBounds();
+                sub.setPosition((1280.f - sb.width) / 2.f, 185.f); window.draw(sub);
+            }
+            window.draw(makeRect(200.f, 220.f, 880.f, 1.f, sf::Color(0, 212, 255, 60)));
+
+            {
+                sf::Text s1; s1.setFont(font);
+                s1.setString("STEP 1 - NUMBER OF BLOCKS");
+                s1.setCharacterSize(12); s1.setFillColor(C_DIM);
+                s1.setPosition(540.f, 260.f); window.draw(s1);
+            }
+            inpBlocks.draw(window);
+            btnNext.draw(window, mouse);
+
+            if (setupGenerated)
+            {
+                sf::Text s2; s2.setFont(font);
+                s2.setString("STEP 2 - ROWS PER BLOCK  (slots default to 4 per row)");
+                s2.setCharacterSize(12); s2.setFillColor(C_DIM);
+                s2.setPosition(100.f, 405.f); window.draw(s2);
+                for (auto& ri : setupRowInputs) ri.draw(window);
+                btnCreate.draw(window, mouse);
+            }
+        }
+
+        else
+        {
+            const float PX = 220.f, PY = 70.f, PW = 1060.f;
+            const float FY = PY + 130.f;
+
+            
+            window.draw(makeRect(0.f, 0.f, 1280.f, 60.f, sf::Color(10, 18, 35), C_BORDER, 0.f));
+            window.draw(makeRect(0.f, 59.f, 1280.f, 1.f, C_ACCENT));
+            {
+                
+                sf::Text t; t.setFont(font);
+                t.setString("[ SMART PARKING SYSTEM ]");
+                t.setCharacterSize(20); t.setFillColor(C_ACCENT);
+                t.setPosition(220.f, 18.f); window.draw(t);
+            }
+
+          
+            if (lot.ptr)
+            {
+                int total, occ, fr; getStats(lot, total, occ, fr);
+                float pct = (total > 0) ? (100.f * static_cast<float>(occ) / static_cast<float>(total)) : 0.f;
+                auto statTxt = [&](const std::string& s, float x, sf::Color c) {
+                    sf::Text t; t.setFont(font); t.setString(s);
+                    t.setCharacterSize(12); t.setFillColor(c); t.setPosition(x, 22.f);
+                    window.draw(t);
+                    };
+                statTxt("FREE: " + std::to_string(fr), 500.f, C_GREEN);
+                statTxt("OCC: " + std::to_string(occ), 640.f, C_RED);
+                statTxt("TOTAL: " + std::to_string(total), 760.f, C_ACCENT);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%.0f%% FULL", static_cast<double>(pct));
+                statTxt(std::string(buf), 900.f, C_YELLOW);
+            }
+
+            
+            window.draw(makeRect(0.f, 60.f, 215.f, 720.f, C_PANEL, C_BORDER, 0.f));
+            window.draw(makeRect(215.f, 60.f, 1.f, 720.f, C_BORDER));
+            {
+                sf::Text t; t.setFont(font); t.setString("OPERATIONS");
+                t.setCharacterSize(10); t.setFillColor(C_DIM); t.setLetterSpacing(3.f);
+                t.setPosition(SBX + 5.f, 110.f); window.draw(t);
+                window.draw(makeRect(SBX, 125.f, SBW, 1.f, C_BORDER));
+            }
+            for (int i = 0; i < 7; i++)
+            {
+                if (static_cast<int>(panel) == i)
+                {
+                    sidebtns[i].box.setFillColor(sf::Color(0, 212, 255, 25));
+                    sidebtns[i].box.setOutlineColor(C_ACCENT);
+                }
+                sidebtns[i].draw(window, mouse);
+            }
+
+            {
+                const char* ptitles[] = { "VIEW LOT","PARK VEHICLE","UNPARK VEHICLE",
+                                        "FIND VEHICLE","SMART PARK","GROW SLOTS","SHRINK SLOTS" };
+                sf::Text t; t.setFont(font);
+                t.setString(ptitles[static_cast<int>(panel)]);
+                t.setCharacterSize(16); t.setFillColor(C_ACCENT); t.setLetterSpacing(2.f);
+                t.setPosition(PX + 15.f, PY + 12.f); window.draw(t);
+                window.draw(makeRect(PX + 15.f, PY + 38.f, PW - 30.f, 1.f, C_BORDER));
+            }
+
+            if (!resultMsg.empty())
+            {
+                sf::Text rm; rm.setFont(font); rm.setString(resultMsg);
+                rm.setCharacterSize(13); rm.setFillColor(resultColor);
+                rm.setPosition(PX + 15.f, PY + 50.f); window.draw(rm);
+            }
+
+            if (panel == PNL_VIEW && lot.ptr)
+            {
+                float startX = PX + 15.f, startY = PY + 70.f - viewScrollY;
+                float blockW = PW - 30.f, curY = startY;
+
+                for (int bi = 0; bi < lot.b; bi++)
+                {
+                   
+                    float blockH = 30.f + static_cast<float>(lot.rpb[bi]) * 68.f;
+                    window.draw(makeRect(startX, curY, blockW, blockH, C_CARD, C_BORDER));
+                    window.draw(makeRect(startX, curY, blockW, 2.f, sf::Color(0, 212, 255, 80)));
+
+                  
+                    {
+                        sf::Text bt; bt.setFont(font);
+                        bt.setString("BLOCK " + std::to_string(bi + 1));
+                        bt.setCharacterSize(14); bt.setFillColor(C_ACCENT); bt.setLetterSpacing(2.f);
+                        bt.setPosition(startX + 12.f, curY + 7.f); window.draw(bt);
+                    }
+
+                    // Occupancy bar
+                    {
+                        int btot = 0, bocc = 0;
+                        for (int rr = 0; rr < lot.rpb[bi]; rr++)
+                            for (int ss = 0; ss < lot.spb[bi][rr]; ss++)
+                            {
+                                btot++; if (!isSlotEmpty(lot.ptr, bi + 1, rr + 1, ss + 1))bocc++;
+                            }
+
+                        float barW = 150.f, bx = startX + blockW - barW - 15.f, by = curY + 11.f;
+                        window.draw(makeRect(bx, by, barW, 8.f, sf::Color(20, 30, 40), C_BORDER));
+                        
+                        float fillW = (btot > 0) ? (barW * static_cast<float>(bocc) / static_cast<float>(btot)) : 0.f;
+                        sf::Color fillC = (bocc == btot) ? C_RED : (bocc > btot / 2) ? C_YELLOW : C_GREEN;
+                        window.draw(makeRect(bx, by, fillW, 8.f, fillC, sf::Color(0, 0, 0, 0)));
+                        char buf2[32]; std::snprintf(buf2, sizeof(buf2), "%d/%d", bocc, btot);
+                        sf::Text bc2; bc2.setFont(font); bc2.setString(buf2);
+                        bc2.setCharacterSize(11); bc2.setFillColor(fillC);
+                        bc2.setPosition(bx + barW + 6.f, by - 2.f); window.draw(bc2);
+                    }
+
+                    float ry = curY + 30.f;
+                    for (int ri = 0; ri < lot.rpb[bi]; ri++)
+                    {
+                        sf::Text rl; rl.setFont(font);
+                        rl.setString("R" + std::to_string(ri + 1));
+                        rl.setCharacterSize(11); rl.setFillColor(C_DIM);
+                        rl.setPosition(startX + 8.f, ry + 20.f); window.draw(rl);
+
+                        window.draw(makeRect(startX + 30.f, ry + 26.f, blockW - 40.f, 16.f, sf::Color(15, 20, 30)));
+                        for (float dx = startX + 50.f; dx < startX + blockW - 40.f; dx += 30.f)
+                            window.draw(makeRect(dx, ry + 32.f, 15.f, 4.f, sf::Color(255, 215, 0, 60)));
+
+                        const float slotW = 60.f, slotH = 52.f, gap = 6.f;
+                        float sx = startX + 38.f;
+                        for (int si = 0; si < lot.spb[bi][ri]; si++)
+                        {
+                            bool empty = isSlotEmpty(lot.ptr, bi + 1, ri + 1, si + 1);
+                            bool isHL = (bi + 1 == highlightB && ri + 1 == highlightR && si + 1 == highlightS);
+                           
+                            float slotX = sx + static_cast<float>(si) * (slotW + gap), slotY = ry + 5.f;
+                            sf::Color bg = empty ? C_EMPTY_BG : C_OCC_BG;
+                            sf::Color brd = empty ? C_GREEN : C_RED;
+                            if (isHL) { bg = sf::Color(255, 215, 0, 40); brd = C_YELLOW; }
+                            window.draw(makeRect(slotX, slotY, slotW, slotH, bg, brd, isHL ? 2.f : 1.f));
+
+                            sf::Text ico; ico.setFont(font);
+                            ico.setString(empty ? "P" : "CAR");
+                            ico.setCharacterSize(empty ? 18u : 12u);
+                            ico.setFillColor(empty ? sf::Color(0, 255, 136, 60) : sf::Color(255, 80, 80, 200));
+                            sf::FloatRect ib = ico.getLocalBounds();
+                            ico.setPosition(slotX + (slotW - ib.width) / 2.f, slotY + 5.f); window.draw(ico);
+
+                            if (!empty)
+                            {
+                                sf::Text pl2; pl2.setFont(font);
+                                pl2.setString(lot.ptr[bi][ri][si]);
+                                pl2.setCharacterSize(9); pl2.setFillColor(C_TEXT);
+                                sf::FloatRect pb = pl2.getLocalBounds();
+                                pl2.setPosition(slotX + (slotW - pb.width) / 2.f, slotY + 30.f);
+                                window.draw(pl2);
+                            }
+
+                            sf::Text sn; sn.setFont(font);
+                            sn.setString("S" + std::to_string(si + 1));
+                            sn.setCharacterSize(9); sn.setFillColor(C_DIM);
+                            sf::FloatRect snb = sn.getLocalBounds();
+                            sn.setPosition(slotX + (slotW - snb.width) / 2.f, slotY + 42.f);
+                            window.draw(sn);
+                        }
+                        ry += 68.f;
+                    }
+                    curY += blockH + 20.f;
+                }
+            }
+
+            auto drawFormBg = [&]() {
+                window.draw(makeRect(PX + 10.f, PY + 60.f, PW - 20.f, 190.f, C_CARD, C_BORDER));
+                };
+
+            if (panel == PNL_PARK)
+            {
+                drawFormBg();
+                setPos(pBlock, PX + 20.f, FY); setPos(pRow, PX + 160.f, FY);
+                setPos(pSlot, PX + 300.f, FY); setPos(pPlate, PX + 440.f, FY);
+                pBlock.draw(window); pRow.draw(window); pSlot.draw(window); pPlate.draw(window);
+                setPos(btnPark, PX + 20.f, FY + 50.f); btnPark.draw(window, mouse);
+            }
+            if (panel == PNL_UNPARK)
+            {
+                drawFormBg();
+                setPos(upBlock, PX + 20.f, FY); setPos(upRow, PX + 160.f, FY); setPos(upSlot, PX + 300.f, FY);
+                upBlock.draw(window); upRow.draw(window); upSlot.draw(window);
+                setPos(btnUnpark, PX + 20.f, FY + 50.f); btnUnpark.draw(window, mouse);
+            }
+            if (panel == PNL_FIND)
+            {
+                drawFormBg();
+                setPos(fPlate, PX + 20.f, FY); fPlate.draw(window);
+                setPos(btnFind, PX + 20.f, FY + 50.f); btnFind.draw(window, mouse);
+            }
+            if (panel == PNL_SMART)
+            {
+                drawFormBg();
+                setPos(smBlock, PX + 20.f, FY); setPos(smPlate, PX + 160.f, FY);
+                smBlock.draw(window); smPlate.draw(window);
+                setPos(btnSmart, PX + 20.f, FY + 50.f); btnSmart.draw(window, mouse);
+                sf::Text info; info.setFont(font);
+                info.setString("Finds the nearest empty slot to block entrance and parks automatically.");
+                info.setCharacterSize(11); info.setFillColor(C_DIM);
+                info.setPosition(PX + 20.f, FY + 100.f); window.draw(info);
+            }
+            if (panel == PNL_GROW)
+            {
+                drawFormBg();
+                setPos(grBlock, PX + 20.f, FY); setPos(grRow, PX + 160.f, FY); setPos(grNew, PX + 300.f, FY);
+                grBlock.draw(window); grRow.draw(window); grNew.draw(window);
+                setPos(btnGrow, PX + 20.f, FY + 50.f); btnGrow.draw(window, mouse);
+            }
+            if (panel == PNL_SHRINK)
+            {
+                drawFormBg();
+                setPos(shBlock, PX + 20.f, FY); setPos(shRow, PX + 160.f, FY); setPos(shNew, PX + 300.f, FY);
+                shBlock.draw(window); shRow.draw(window); shNew.draw(window);
+                setPos(btnShrink, PX + 20.f, FY + 50.f); btnShrink.draw(window, mouse);
+                sf::Text warn; warn.setFont(font);
+                warn.setString("WARNING: Only trailing empty slots can be removed.");
+                warn.setCharacterSize(11); warn.setFillColor(C_RED);
+                warn.setPosition(PX + 20.f, FY + 100.f); window.draw(warn);
+            }
+        } 
+        {
+            float ty = 80.f;
+            for (auto& t : toasts)
+            {
+            
+                sf::Uint8 alpha = static_cast<sf::Uint8>(std::min(1.f, t.timer) * 255.f);
+                window.draw(makeRect(1280.f - 330.f, ty, 315.f, 46.f,
+                    sf::Color(10, 18, 35, alpha), t.color, 1.f));
+                sf::Text tt; tt.setFont(font); tt.setString(t.msg);
+                tt.setCharacterSize(12);
+                tt.setFillColor(sf::Color(t.color.r, t.color.g, t.color.b, alpha));
+                tt.setPosition(1280.f - 322.f, ty + 14.f); window.draw(tt);
+                ty += 54.f;
+            }
+        }
+
+        window.display();
+    }
+
+    freeLot(lot);
+    return 0;
+}
