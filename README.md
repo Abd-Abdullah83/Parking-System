@@ -206,6 +206,7 @@ SHRINK → Enter block, row, new slot count → fails if occupied slots would be
 ```
 Parking-System/
 │
+├── 📄 Output                ← Contains Screenshot of Output
 ├── 📄 ParkingSystem(SFML)   ← Graphical SFML application
 ├── 📄 ParkingClass.cpp      ← Core parking logic & data structures
 ├── 📄 CarPark.cpp           ← Entry point / supporting code
